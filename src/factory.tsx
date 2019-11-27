@@ -728,19 +728,18 @@ export function HocStoreFactory(renderer: {
             );
         } else if (isObjectShallowModified(props.data, nextProps.data)) {
           if (nextProps.store && nextProps.store.data === nextProps.data) {
-            const newData = createObject(
-              nextProps.store.data,
-              syncDataFromSuper(
-                store.data,
+            store.initData(
+              createObject(
                 nextProps.store.data,
-                props.scope,
-                nextProps.dataUpdatedAt !== props.dataUpdatedAt,
-                store
+                syncDataFromSuper(
+                  store.data,
+                  nextProps.store.data,
+                  props.scope,
+                  nextProps.dataUpdatedAt !== props.dataUpdatedAt,
+                  store
+                )
               )
             );
-
-            // todo fix: dialog 种数据从孩子 form 同步过来后，会走这个逻辑让 form 更新 data，会导致里面的 __prev 丢失。
-            store.initData(newData);
           } else if (nextProps.data && (nextProps.data as any).__super) {
             store.initData(extendObject(nextProps.data));
           } else {

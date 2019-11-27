@@ -8,6 +8,7 @@ import {anyChanged, promisify, isObject, getVariable} from '../../utils/helper';
 import {Schema} from '../../types';
 import {IIRendererStore} from '../../store';
 import {ScopedContext, IScopedContext} from '../../Scoped';
+import {reaction} from 'mobx';
 
 export interface ControlProps extends RendererProps {
   control: {
@@ -35,15 +36,25 @@ export interface ControlProps extends RendererProps {
   removeHook: (fn: () => any) => void;
 }
 
-export default class FormControl extends React.Component<ControlProps> {
+interface ControlState {
+  value: any;
+}
+
+export default class FormControl extends React.PureComponent<
+  ControlProps,
+  ControlState
+> {
   public model: IFormItemStore | undefined;
   control: any;
   hook?: () => any;
   hook2?: () => any;
+  reaction?: () => void;
 
-  static defaultProps: Partial<ControlProps> = {};
+  static defaultProps = {};
 
   lazyValidate: Function;
+  lazyEmitChange: (submitOnChange: boolean) => void;
+  state = {value: this.props.control.value};
   componentWillMount() {
     const {
       formStore: form,
@@ -76,12 +87,16 @@ export default class FormControl extends React.Component<ControlProps> {
       trailing: true,
       leading: false
     });
+    this.lazyEmitChange = debouce(this.emitChange.bind(this), 250, {
+      trailing: true,
+      leading: false
+    });
 
     if (!name) {
       return;
     }
 
-    this.model = form.registryItem(name, {
+    const model = (this.model = form.registryItem(name, {
       id,
       type,
       required,
@@ -95,7 +110,7 @@ export default class FormControl extends React.Component<ControlProps> {
       labelField,
       joinValues,
       extractValue
-    });
+    }));
 
     if (
       this.model.unique &&
@@ -105,6 +120,15 @@ export default class FormControl extends React.Component<ControlProps> {
       const combo = form.parentStore as IComboStore;
       combo.bindUniuqueItem(this.model);
     }
+
+    // 同步 value
+    this.setState({
+      value: model.value
+    });
+    this.reaction = reaction(
+      () => model.value,
+      value => this.setState({value})
+    );
   }
 
   componentDidMount() {
@@ -118,7 +142,7 @@ export default class FormControl extends React.Component<ControlProps> {
     if (name && form !== store) {
       const value = getVariable(store.data, name);
       if (typeof value !== 'undefined' && value !== this.getValue()) {
-        this.handleChange(value);
+        this.handleChange(value, false, true);
       }
     }
 
@@ -144,14 +168,16 @@ export default class FormControl extends React.Component<ControlProps> {
     if (!nextProps.control.name) {
       // 把 name 删了, 对 model 做清理
       this.model && this.disposeModel();
+      this.reaction && this.reaction();
       this.model = undefined;
       return;
     } else if (nextProps.control.name !== props.control.name || !this.model) {
       // 对 model 做清理
       this.model && this.disposeModel();
+      this.reaction && this.reaction();
 
       // name 是后面才有的，比如编辑模式下就会出现。
-      this.model = form.registryItem(nextProps.control.name, {
+      const model = (this.model = form.registryItem(nextProps.control.name, {
         id: nextProps.control.id,
         type: nextProps.control.type,
         required: nextProps.control.required,
@@ -165,8 +191,16 @@ export default class FormControl extends React.Component<ControlProps> {
         joinValues: nextProps.control.joinValues,
         extractValue: nextProps.control.extractValue,
         messages: nextProps.control.validationErrors
-      });
+      }));
       // this.forceUpdate();
+      this.setState({
+        value: model.value
+      });
+
+      this.reaction = reaction(
+        () => model.value,
+        value => this.setState({value})
+      );
     }
 
     if (
@@ -227,7 +261,7 @@ export default class FormControl extends React.Component<ControlProps> {
       (value = getVariable(data as any, name)) !==
         getVariable(prevProps.data, name)
     ) {
-      this.handleChange(value);
+      this.handleChange(value, false, true);
     }
   }
 
@@ -235,6 +269,9 @@ export default class FormControl extends React.Component<ControlProps> {
     this.hook && this.props.removeHook(this.hook);
     this.hook2 && this.props.removeHook(this.hook2);
     this.disposeModel();
+    this.reaction && this.reaction();
+    (this.lazyValidate as any).cancel();
+    (this.lazyEmitChange as any).cancel();
   }
 
   disposeModel() {
@@ -305,18 +342,13 @@ export default class FormControl extends React.Component<ControlProps> {
 
   handleChange(
     value: any,
-    submitOnChange: boolean = this.props.control.submitOnChange
+    submitOnChange: boolean = this.props.control.submitOnChange,
+    changeImmediately: boolean = false
   ) {
     const {
-      formStore: form,
       onChange,
-      control: {
-        validateOnChange,
-        name,
-        pipeOut,
-        onChange: onFormItemChange,
-        type
-      }
+      control: {type},
+      formInited
     } = this.props;
 
     // todo 以后想办法不要強耦合类型。
@@ -324,6 +356,28 @@ export default class FormControl extends React.Component<ControlProps> {
       onChange && onChange(...(arguments as any));
       return;
     }
+
+    this.setState(
+      {
+        value
+      },
+      () =>
+        changeImmediately || !formInited
+          ? this.emitChange(submitOnChange)
+          : this.lazyEmitChange(submitOnChange)
+    );
+  }
+
+  emitChange(submitOnChange: boolean = this.props.control.submitOnChange) {
+    const {
+      formStore: form,
+      onChange,
+      control: {validateOnChange, name, pipeOut, onChange: onFormItemChange}
+    } = this.props;
+    if (!this.model) {
+      return;
+    }
+    let value = this.state.value;
     const oldValue = this.model.value;
 
     if (pipeOut) {
@@ -411,11 +465,8 @@ export default class FormControl extends React.Component<ControlProps> {
   }
 
   getValue() {
-    const {control, formStore: form} = this.props;
-
-    const model = this.model;
-    // let value:any = model ? (typeof model.value === 'undefined' ? '' : model.value) : (control.value || '');
-    let value: any = model ? model.value : control.value;
+    const {formStore: form, control} = this.props;
+    let value: any = this.state.value;
 
     if (control.pipeIn) {
       value = control.pipeIn(value, form.data);
@@ -457,7 +508,7 @@ export default class FormControl extends React.Component<ControlProps> {
 
     return render('', control, {
       ...rest,
-      key: `${control.name}-${control.type}`, // 很重要：如果不写实际的 control 组件变了，但是 this.control 还是引用的原来那个。
+      key: `${control.name || ''}-${control.type}`, // 很重要：如果不写实际的 control 组件变了，但是 this.control 还是引用的原来那个。
       defaultSize: controlWidth,
       disabled: disabled || control.disabled,
       formItem: model,

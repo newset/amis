@@ -15,7 +15,8 @@ import {
   getScrollParent,
   difference,
   noop,
-  autobind
+  autobind,
+  isArrayChilrenModified
 } from '../utils/helper';
 import {resolveVariable} from '../utils/tpl-builtin';
 import {
@@ -333,7 +334,7 @@ export default class Table extends React.Component<TableProps, object> {
     ) {
       Table.syncRows(store, nextProps, props);
       this.syncSelected();
-    } else if (props.selected !== nextProps.selected) {
+    } else if (isArrayChilrenModified(props.selected, nextProps.selected)) {
       store.updateSelected(nextProps.selected || [], nextProps.valueField);
       this.syncSelected();
     }
@@ -1154,7 +1155,6 @@ export default class Table extends React.Component<TableProps, object> {
       );
     }
 
-    const $$id = column.pristine.$$id ? `${column.pristine.$$id}-column` : '';
     const subProps: any = {
       ...props,
       btnDisabled: store.dragging,
@@ -1165,7 +1165,6 @@ export default class Table extends React.Component<TableProps, object> {
       quickEditFormRef: this.subFormRef,
       prefix
     };
-    delete subProps.$$id;
     delete subProps.label;
 
     return render(
@@ -1173,8 +1172,7 @@ export default class Table extends React.Component<TableProps, object> {
       {
         ...column.pristine,
         column: column.pristine,
-        type: 'cell',
-        $$id
+        type: 'cell'
       },
       subProps
     );
@@ -1306,7 +1304,6 @@ export default class Table extends React.Component<TableProps, object> {
                     onQuickChange={
                       store.dragging ? null : this.handleQuickChange
                     }
-                    $$editable={false /* 为了编辑器特意加的 */}
                   />
                 );
               })
@@ -1468,7 +1465,7 @@ export default class Table extends React.Component<TableProps, object> {
     }
 
     const otherProps: any = {};
-    editable === false && (otherProps.$$editable = false);
+    // editable === false && (otherProps.$$editable = false);
 
     const child = headerToolbarRender
       ? headerToolbarRender(

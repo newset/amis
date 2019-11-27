@@ -1,4 +1,11 @@
-import {types, getParent, SnapshotIn, flow, getRoot} from 'mobx-state-tree';
+import {
+  types,
+  getParent,
+  SnapshotIn,
+  flow,
+  getRoot,
+  hasParent
+} from 'mobx-state-tree';
 import {IFormStore} from './form';
 import {str2rules, validate as doValidate} from '../utils/validations';
 import {Api, Payload, fetchOptions} from '../types';
@@ -11,6 +18,7 @@ import {IRendererStore} from '.';
 import {normalizeOptions} from '../components/Select';
 import find = require('lodash/find');
 import {SimpleMap} from '../utils/SimpleMap';
+import memoize = require('lodash/memoize');
 
 interface IOption {
   value?: string | number | null;
@@ -58,11 +66,11 @@ export const FormItemStore = types
   })
   .views(self => {
     function getForm(): any {
-      return getParent(self, 2);
+      return hasParent(self, 2) ? getParent(self, 2) : null;
     }
 
     function getValue(): any {
-      return getForm().getValueByName(self.name);
+      return getForm() ? getForm().getValueByName(self.name) : undefined;
     }
 
     function getLastOptionValue(): any {
@@ -105,10 +113,8 @@ export const FormItemStore = types
         return getLastOptionValue();
       },
 
-      getSelectedOptions(value: any = getValue()) {
-        if (value === getValue()) {
-          return self.selectedOptions;
-        } else if (typeof value === 'undefined') {
+      getSelectedOptions: (value: any = getValue()) => {
+        if (typeof value === 'undefined') {
           return [];
         }
 
@@ -126,7 +132,12 @@ export const FormItemStore = types
                 : value
             ];
 
-        if (value && value.hasOwnProperty(self.labelField || 'label')) {
+        // 保留原来的 label 信息，如果原始值中有 label。
+        if (
+          value &&
+          value.hasOwnProperty(self.labelField || 'label') &&
+          !selected[0].hasOwnProperty(self.labelField || 'label')
+        ) {
           selected[0] = {
             [self.labelField || 'label']: value[self.labelField || 'label'],
             [self.valueField || 'value']: value[self.valueField || 'value']
@@ -135,7 +146,7 @@ export const FormItemStore = types
 
         const selectedOptions: Array<any> = [];
 
-        self.filteredOptions.forEach((item: any) => {
+        flattenTree(self.filteredOptions).forEach((item: any) => {
           let idx = findIndex(selected, seleced => {
             return isObject(seleced)
               ? seleced === item[self.valueField || 'value']
@@ -338,7 +349,11 @@ export const FormItemStore = types
       data: object,
       options?: fetchOptions,
       clearValue?: any,
-      onChange?: (value: any) => void
+      onChange?: (
+        value: any,
+        submitOnChange: boolean,
+        changeImmediately: boolean
+      ) => void
     ) {
       try {
         if (loadCancel) {
@@ -383,11 +398,11 @@ export const FormItemStore = types
           setOptions(options);
 
           if (json.data && typeof (json.data as any).value !== 'undefined') {
-            onChange && onChange((json.data as any).value);
+            onChange && onChange((json.data as any).value, false, true);
           } else if (clearValue) {
             self.selectedOptions.some((item: any) => item.__unmatched) &&
               onChange &&
-              onChange('');
+              onChange('', false, true);
           }
         }
 
